@@ -1,0 +1,10 @@
+# Personal config — contains API keys and local paths, never commit
+config.py
+
+# Embedding cache — large JSON file, rebuilt locally
+note_index.json
+
+# Python
+__pycache__/
+*.pyc
+.DS_Store

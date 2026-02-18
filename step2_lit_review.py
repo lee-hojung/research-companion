@@ -32,16 +32,9 @@ from datetime import datetime
 from pathlib import Path
 
 # ==========================================
-# [CONFIGURATION]
+# [CONFIGURATION] — loaded from config.py
 # ==========================================
-OPENAI_KEY = ''
-
-OBSIDIAN_FOLDER =       # Same folder as step1 output (your Obsidian paper notes)
-
-# Path for the embedding cache file (JSON). Lives outside Obsidian folder
-# to avoid being picked up by other tools. Example:
-# INDEX_FILE = '/Users/yourname/research-companion/note_index.json'
-INDEX_FILE =
+from config import OPENAI_KEY, OBSIDIAN_FOLDER, INDEX_FILE
 
 TOP_K = 8               # Candidate papers retrieved before GPT filtering
 EMBEDDING_MODEL = 'text-embedding-3-small'
