@@ -38,7 +38,7 @@ OBSIDIAN_FOLDER =
 KEYWORDS_FILE = 
 
 COLLECTION_ID = ''  # Folder ID
-DUPLICATE_MODE = "replace"  # or "suffix"
+DUPLICATE_MODE = "suffix"  # "suffix" adds 2024a/2024b; "replace" overwrites
 
 # ==========================================
 
@@ -173,17 +173,24 @@ for idx, item in enumerate(items, 1):
     item_key = item['key']
     
     is_paper = item_type in ['journalArticle', 'conferencePaper', 'book', 'bookSection', 'report', 'thesis']
-    is_pdf_attachment = (item_type == 'attachment' and data.get('contentType') == 'application/pdf')
-    
-    if not is_paper and not is_pdf_attachment:
+    # Only process standalone PDFs (no parentItem) — PDFs attached to a paper
+    # are already handled when the parent paper item is processed below.
+    is_standalone_pdf = (
+        item_type == 'attachment'
+        and data.get('contentType') == 'application/pdf'
+        and not data.get('parentItem')
+    )
+
+    if not is_paper and not is_standalone_pdf:
         skip_count += 1
         continue
     
     title = data.get('title', 'Untitled')
     abstract = data.get('abstractNote', '')
     creators = data.get('creators', [])
-    
+
     year = extract_year(data.get('date', ''))
+    is_pdf_attachment = is_standalone_pdf  # alias used later in the logic
     
     print(f"\n{'='*60}")
     print(f"[{idx}/{len(items)}] 📄 {title[:60]}...")
@@ -237,11 +244,33 @@ for idx, item in enumerate(items, 1):
         pdf_url = f"https://api.zotero.org/users/{ZOTERO_ID}/items/{item_key}/file"
     else:
         attachments = zot.children(item_key)
-        for att in attachments:
-            if att['data'].get('contentType') == 'application/pdf':
-                pdf_key = att['key']
-                pdf_url = f"https://api.zotero.org/users/{ZOTERO_ID}/items/{pdf_key}/file"
-                break
+        pdf_attachments = [
+            att for att in attachments
+            if att['data'].get('contentType') == 'application/pdf'
+        ]
+
+        if pdf_attachments:
+            # Filter out supplementary/appendix files by filename
+            SUPPLEMENT_PATTERN = re.compile(
+                r'supplement|appendix|supporting.?info|suppl|SI[\s_-]|ESM',
+                re.IGNORECASE
+            )
+            main_pdfs = [
+                att for att in pdf_attachments
+                if not SUPPLEMENT_PATTERN.search(att['data'].get('title', ''))
+            ]
+            candidates = main_pdfs if main_pdfs else pdf_attachments
+
+            # Among candidates, prefer the largest file (most likely the full paper)
+            def _pdf_size(att):
+                return att['data'].get('filesize', 0) or 0
+
+            selected = max(candidates, key=_pdf_size)
+            pdf_key = selected['key']
+            pdf_url = f"https://api.zotero.org/users/{ZOTERO_ID}/items/{pdf_key}/file"
+
+            if len(pdf_attachments) > 1:
+                print(f"📎 {len(pdf_attachments)} PDFs found → selected: {selected['data'].get('title', pdf_key)}")
     
     content_to_analyze = None
     content_type = None
