@@ -16,4 +16,5 @@ OPENAI_KEY = 'sk-...'                      # platform.openai.com → API keys
 # --- Paths ---
 OBSIDIAN_FOLDER = '/path/to/Obsidian/Papers'
 KEYWORDS_FILE   = '/path/to/research-companion/controlled_keywords.py'
+TAXONOMY_FILE   = '/path/to/research-companion/keyword_taxonomy.json'
 INDEX_FILE      = '/path/to/research-companion/note_index.json'

@@ -24,13 +24,14 @@ import PyPDF2
 from io import BytesIO
 import time
 import re
+import json
 
 # ==========================================
 # [CONFIGURATION] — loaded from config.py
 # ==========================================
 from config import (
     ZOTERO_ID, ZOTERO_KEY, OPENAI_KEY,
-    OBSIDIAN_FOLDER, KEYWORDS_FILE, COLLECTION_ID,
+    OBSIDIAN_FOLDER, KEYWORDS_FILE, TAXONOMY_FILE, COLLECTION_ID,
 )
 
 DUPLICATE_MODE = "suffix"  # "suffix" adds 2024a/2024b; "replace" overwrites
@@ -71,8 +72,42 @@ def load_controlled_keywords(filepath):
     
     return keywords
 
+def load_taxonomy(taxonomy_filepath):
+    """Load keyword taxonomy JSON produced by step0 (synonyms + hierarchy).
+
+    Returns dict with 'synonyms' and 'hierarchy' keys, or empty dicts if not found.
+    """
+    if not taxonomy_filepath or not os.path.exists(taxonomy_filepath):
+        print("ℹ️  No taxonomy file found — running without synonym/hierarchy support")
+        print(f"   Expected: {taxonomy_filepath}")
+        return {"synonyms": {}, "hierarchy": {}}
+
+    try:
+        with open(taxonomy_filepath, 'r', encoding='utf-8') as f:
+            taxonomy = json.load(f)
+        n_synonyms = len(taxonomy.get("synonyms", {}))
+        n_parents = len(taxonomy.get("hierarchy", {}))
+        print(f"✅ Taxonomy loaded: {n_synonyms} synonyms, {n_parents} parent categories")
+        return taxonomy
+    except Exception as e:
+        print(f"⚠️ Could not load taxonomy: {e}")
+        return {"synonyms": {}, "hierarchy": {}}
+
+
+def get_parent_categories(selected_keywords, taxonomy):
+    """Return sorted list of parent category names that cover any of the selected keywords."""
+    hierarchy = taxonomy.get("hierarchy", {})
+    parents = set()
+    for kw in selected_keywords:
+        for parent, children in hierarchy.items():
+            if kw.lower() in [c.lower() for c in children]:
+                parents.add(parent)
+    return sorted(parents)
+
+
 # Load controlled keywords at startup
 CONTROLLED_KEYWORDS = load_controlled_keywords(KEYWORDS_FILE)
+TAXONOMY = load_taxonomy(TAXONOMY_FILE)
 
 os.makedirs(OBSIDIAN_FOLDER, exist_ok=True)
 
@@ -140,7 +175,10 @@ print("📚 Zotero to Obsidian - Paper Analyzer")
 print("="*60)
 print(f"🔍 Fetching items from collection...")
 print(f"📋 Duplicate handling mode: {DUPLICATE_MODE}")
-print(f"📌 Controlled keywords loaded: {len(CONTROLLED_KEYWORDS)}\n")
+print(f"📌 Controlled keywords loaded: {len(CONTROLLED_KEYWORDS)}")
+n_syn = len(TAXONOMY.get("synonyms", {}))
+n_hier = len(TAXONOMY.get("hierarchy", {}))
+print(f"🗂️  Taxonomy: {n_syn} synonyms, {n_hier} parent categories\n")
 
 if len(CONTROLLED_KEYWORDS) == 0:
     print("⚠️ WARNING: No controlled keywords loaded!")
@@ -316,16 +354,27 @@ for idx, item in enumerate(items, 1):
     try:
         print(f"🧠 Analyzing with AI... (source: {content_type})")
         
-        # Build keyword list for prompt
+        # Build keyword list for prompt (with synonym guidance if available)
         if CONTROLLED_KEYWORDS:
             keywords_list = "\n".join([f"- {kw}" for kw in CONTROLLED_KEYWORDS])
+
+            # Add canonical-form reminders from synonyms so AI avoids variants
+            synonyms = TAXONOMY.get("synonyms", {})
+            if synonyms:
+                synonym_examples = ", ".join(
+                    f'use "{v}" not "{k}"' for k, v in list(synonyms.items())[:5]
+                )
+                synonym_note = f"\n   - Use canonical forms only (e.g. {synonym_examples})"
+            else:
+                synonym_note = ""
+
             keyword_instruction = f"""
 2. Select 5-7 keywords from the CONTROLLED KEYWORD LIST below.
-   - ONLY use keywords from this list
+   - ONLY use keywords from this list{synonym_note}
    - Choose the most relevant ones for this paper
    - Format each as [[keyword]]
    - If a perfect match doesn't exist, choose the closest related keyword
-   
+
 CONTROLLED KEYWORD LIST:
 {keywords_list}
 """
@@ -383,25 +432,38 @@ Analyze the following paper abstract and provide a structured summary in English
         )
         
         ai_result = response.choices[0].message.content
-        
+
+        # Derive parent categories from the keywords the AI selected
+        selected_keywords = re.findall(r'\[\[([^\]]+)\]\]', ai_result)
+        parent_categories = get_parent_categories(selected_keywords, TAXONOMY)
+
+        if parent_categories:
+            parent_links = " | ".join(f"[[{p}]]" for p in parent_categories)
+            parent_line = f"\n**Parent Topics:** {parent_links}\n"
+            print(f"      🗂️  Parent categories: {', '.join(parent_categories)}")
+        else:
+            parent_line = ""
+
         # Save to file
         source_tag = "full-text" if content_type == "full_text" else "abstract-only"
-        
+        categories_yaml = json.dumps(parent_categories) if parent_categories else "[]"
+
         markdown_content = f"""---
 title: {title}
 author: {author_part}
 year: {final_year}
 date: {datetime.now().strftime('%Y-%m-%d')}
 tags: [paper, auto-generated, {source_tag}]
+categories: {categories_yaml}
 source: {content_type}
 ---
 
 # {title}
 
-**Author(s):** {author_part}  
-**Year:** {final_year}  
+**Author(s):** {author_part}
+**Year:** {final_year}
 **Analysis based on:** {content_type.replace('_', ' ').title()}
-
+{parent_line}
 {ai_result}
 """
         

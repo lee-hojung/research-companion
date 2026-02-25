@@ -42,6 +42,7 @@ TOP_N_KEYWORDS = 100
 # Output file paths
 OUTPUT_FILE = ""
 PROGRESS_FILE = ""
+TAXONOMY_FILE = ""   # e.g. '/path/to/keyword_taxonomy.json'
 
 # Education Finance and Policy ISSN
 EFP_ISSN = "1557-3060"
@@ -413,6 +414,73 @@ def consolidate_similar_keywords(keyword_counts):
     
     return consolidated
 
+def generate_taxonomy(top_keywords, client_instance):
+    """Use AI to build synonym mappings and hierarchical structure from top keywords.
+
+    Returns a dict with two keys:
+      - 'synonyms':  {variant: canonical_form, ...}
+      - 'hierarchy': {parent_category: [child_keyword, ...], ...}
+    """
+
+    print("\n🏗️  Generating keyword taxonomy (synonyms + hierarchy)...")
+
+    keywords_text = "\n".join([f"- {kw}" for kw, _ in top_keywords])
+
+    prompt = f"""You are an expert in education policy research methodology.
+
+Given these research keywords extracted from Education Finance and Policy journal articles:
+{keywords_text}
+
+Create a structured taxonomy with two components:
+
+1. SYNONYMS: Map variant/near-duplicate terms to ONE canonical form that already exists in the list.
+   Example: {{"causal analysis": "causal inference", "2sls": "two-stage least squares"}}
+
+2. HIERARCHY: Group related specific keywords under a broader parent category label.
+   Example:
+   {{
+     "quasi-experimental methods": ["difference-in-differences", "regression discontinuity", "instrumental variables"],
+     "school finance policy": ["Title I", "capital expenditure", "per-pupil expenditure"]
+   }}
+
+Output ONLY valid JSON in this exact format:
+{{
+  "synonyms": {{
+    "variant term": "canonical term"
+  }},
+  "hierarchy": {{
+    "parent category": ["child keyword 1", "child keyword 2"]
+  }}
+}}
+
+Rules:
+- Canonical terms in synonyms must come from the provided keyword list
+- Each keyword should belong to at most ONE parent category
+- Only group keywords that are clearly conceptually related
+- Be conservative — only group things you are confident about"""
+
+    try:
+        response = client_instance.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are an expert in education policy research taxonomy design. Output only valid JSON with no additional text."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"}
+        )
+
+        taxonomy = json.loads(response.choices[0].message.content)
+        n_synonyms = len(taxonomy.get("synonyms", {}))
+        n_parents = len(taxonomy.get("hierarchy", {}))
+        print(f"   ✅ {n_synonyms} synonym mappings, {n_parents} parent categories")
+        return taxonomy
+
+    except Exception as e:
+        print(f"   ❌ Taxonomy generation failed: {e}")
+        return {"synonyms": {}, "hierarchy": {}}
+
+
 def main():
     
     print("="*60)
@@ -476,6 +544,16 @@ def main():
             f.write(f"{idx}. {keyword} ({count} occurrences)\n")
     
     print(f"\n✅ Results saved to: {OUTPUT_FILE}")
+
+    # Generate and save keyword taxonomy (synonyms + hierarchy)
+    if TAXONOMY_FILE:
+        taxonomy = generate_taxonomy(top_keywords, client)
+        os.makedirs(os.path.dirname(TAXONOMY_FILE), exist_ok=True)
+        with open(TAXONOMY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(taxonomy, f, ensure_ascii=False, indent=2)
+        print(f"✅ Taxonomy saved to: {TAXONOMY_FILE}")
+    else:
+        print("ℹ️  TAXONOMY_FILE not set — skipping taxonomy generation")
     print(f"\n{'='*60}")
     print("📈 Top 20 Keywords Preview:")
     print(f"{'='*60}")
